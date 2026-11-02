@@ -13,6 +13,12 @@ if len(sys.argv) != 4:
     print("Usage: python get_aligned_fragments.py <input.xlsx> <fasta> <output_dir>")
     sys.exit(1)
 
+def get_bc_len(bc):
+    if bc == 'empty':
+        return 0
+    else:
+        return len(bc)
+
 def parse_xlsx_and_generate_fasta(xlsx_file, fasta_file, output_dir):
     """
     xlsx_file: 包含barcode比对信息的Excel文件
@@ -59,7 +65,7 @@ def parse_xlsx_and_generate_fasta(xlsx_file, fasta_file, output_dir):
             start_idx = row['start_index']
             end_idx = row['end_index']
             # barcode_num = row['end_index'] - row['start_index'] + 1  # 实际barcode长度
-            barcode_len = [len(x) for x in str(row['barcodes']).split('|')]
+            barcode_len = [get_bc_len(x) for x in str(row['barcodes']).split('|')]
             intervals = [int(x) for x in str(row['intervals']).split('|')]
             first_barcode_start = row['first_barcode_to_start']
             
@@ -77,7 +83,11 @@ def parse_xlsx_and_generate_fasta(xlsx_file, fasta_file, output_dir):
             
             # 计算后续barcode的起始位置
             for i in range(len(intervals)-1):
-                barcode_starts.append(barcode_starts[-1] + intervals[i+1])
+                step = intervals[i+1]
+                if barcode_len[i+1] == 0:
+                    # empty 的间距是从上一个barcode的末尾算起的
+                    step += barcode_len[i]
+                barcode_starts.append(barcode_starts[-1] + step)
             
             # 根据start_index和end_index确定这个read覆盖的barcode范围
             # 注意：start_index和end_index是barcode在assembly上的索引
@@ -95,17 +105,10 @@ def parse_xlsx_and_generate_fasta(xlsx_file, fasta_file, output_dir):
                     # 最后一个barcode，结束位置是read结尾减去last_barcode_to_end
                     fragment_end = -1
                     
-                    # 提取该barcode对应的序列
-                    # 注意：barcode_start是read上的位置，barcode_end也是read上的位置
-                    # 序列从bc_start到bc_end（不包括bc_end，保持python的切片习惯）
-                if fragment_start == 0 and fragment_end != -1:
-                    fragment_seq = full_seq[fragment_start:fragment_end-17]
-                elif fragment_start != 0 and fragment_end == -1:
-                    fragment_seq = full_seq[fragment_start+6:fragment_end]
-                elif fragment_start != 0 and fragment_end != -1:
-                    fragment_seq = full_seq[fragment_start+6:fragment_end-17]
-                else:
-                    print(f"warning: unknown case for read {read_id}, barcode {i}")
+                # 提取该barcode对应的序列
+                # 注意：barcode_start是read上的位置，barcode_end也是read上的位置
+                # 序列从bc_start到bc_end（不包括bc_end，保持python的切片习惯）
+                fragment_seq = full_seq[fragment_start:] if fragment_end == -1 else full_seq[fragment_start:fragment_end]
 
                 # 记录这个序列
                 barcode_sequences[i].append({

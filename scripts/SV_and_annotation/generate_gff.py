@@ -45,7 +45,7 @@ def parse_named_units(units_bed):
     bed共5列：assembly, start, end, name, length
     坐标约定与simplify_variation_structure_by_cluster.py的load_named_units一致：
     start为1-based inclusive，end为exclusive，即1-based区间为[start, end-1]
-    y的取值：Array_x_y -> y；Right_fragment -> R；Left_fragment -> L；其他 -> 名字首字母大写（如Dropped -> D）
+    y的取值：NORx_y -> y；Right_fragment -> R；Left_fragment -> L；其他 -> 名字首字母大写（如Dropped -> D）
     """
     named_units = {}
     with open(units_bed, 'r') as f:
@@ -58,7 +58,7 @@ def parse_named_units(units_bed):
             end = int(parts[2]) - 1  # end为exclusive，转换为inclusive
             name = parts[3]
 
-            m = re.match(r'^Array_\d+_(\d+)$', name)
+            m = re.match(r'^NOR\d+_(\d+)$', name)
             if m:
                 y = m.group(1)
             elif name == 'Right_fragment':
@@ -149,7 +149,8 @@ BUTTERFLY_MAX_MISMATCH = 3        # motif允许的最大mismatch数
 BUTTERFLY_MOTIF_SEEDS = [(0, 8), (8, 15), (15, 22), (22, 30)]
 BUTTERFLY_GAP_MERGE = 3500        # 同一拷贝内部未匹配间隙的聚簇阈值（实测最大~1.8kb）
 BUTTERFLY_MIN_COPY_LEN = 3000     # 接受一个motif末端的最短拷贝长度（拷贝一般4000-5000bp）
-BUTTERFLY_MIN_FEATURE_LEN = 80    # 短于该长度的拷贝/尾巴视为噪声丢弃
+BUTTERFLY_MIN_FEATURE_LEN = 3000  # Butterfly/Long repeat最短长度，短于该长度的拷贝/尾巴一律丢弃
+                                  # （GFF输出终点+19，故输出的feature长度>=3019bp）
 BUTTERFLY_TAIL_MARGIN = 100       # motif可超出最后一个匹配点的大致余量
 # 真实butterfly簇的k-mer匹配密度约0.66-0.86；共享k-mer造成的零星假簇密度仅~0.01，
 # 另有span仅1-2bp的碎片簇，按下面阈值过滤
@@ -194,7 +195,8 @@ def split_butterfly_points(points, seq):
     返回[(start, end), ...]（1-based inclusive，升序）。
     步骤：先按间隙<=BUTTERFLY_GAP_MERGE聚成连续簇；每簇内查找motif末端，
     用「与前一个边界的距离>=BUTTERFLY_MIN_COPY_LEN」贪心确认拷贝末端，
-    最后一motif之后的剩余尾巴>=BUTTERFLY_MIN_FEATURE_LEN时作为(可能不完整的)最后一个拷贝保留。
+    最后一motif之后的剩余尾巴>=BUTTERFLY_MIN_FEATURE_LEN时作为(可能不完整的)最后一个拷贝保留，
+    即每个Butterfly/Long repeat拷贝长度都不小于3000bp。
     """
     if not points:
         return []
@@ -228,13 +230,16 @@ def split_butterfly_points(points, seq):
             else:
                 print(f"Warning: butterfly motif end {m_end} too close to previous "
                       f"boundary {prev_end} (copy would be <{BUTTERFLY_MIN_COPY_LEN}bp), skipped")
-        # 最后一个motif之后的尾巴：可能是被截断/未匹配完的最后一个拷贝
+        # 最后一个motif之后的尾巴：可能是被截断/未匹配完的最后一个拷贝，
+        # 长度不足BUTTERFLY_MIN_FEATURE_LEN（3000bp）时不再输出
         tail_start = prev_end + 1
         if c_end - tail_start + 1 >= BUTTERFLY_MIN_FEATURE_LEN:
             cluster_copies.append((tail_start, c_end))
         if not motif_ends:
+            state = ('kept as a single feature' if cluster_copies
+                     else f'dropped (<{BUTTERFLY_MIN_FEATURE_LEN}bp)')
             print(f"Warning: no butterfly end motif found in region "
-                  f"[{c_start}, {c_end}], kept as a single feature")
+                  f"[{c_start}, {c_end}], {state}")
         copies.extend(cluster_copies)
     return copies
 
@@ -575,7 +580,7 @@ def main(ref_fasta, features_file, query_fasta, output_gff, units_bed='named_uni
                     out.write('\t'.join(parts) + '\n')
                 continue
             
-            # 每个unit写一行gene，unit名字为Array_x_y或Left/Right_fragment
+            # 每个unit写一行gene，unit名字为NORx_y或Left/Right_fragment
             for unit in units:
                 out.write(f'{rec.id}\tself_anno\tgene\t{unit["start"]}\t{unit["end"]}\t.\t+\t.\tID={unit["name"]}\n')
             
@@ -624,7 +629,6 @@ if __name__ == "__main__":
     if len(sys.argv) < 5 or len(sys.argv) > 6:
         print("Usage: python generate_gff.py <ref_fasta> <features_file> <query_fasta> <output_gff> [units_bed]")
         print("  units_bed: named_units.bed defining the units (default: named_units.bed in current directory)")
-        print("  注意：有了named_units.bed之后不再需要flank.bed，unit区间以外的匹配点会被自动过滤")
         sys.exit(1)
     
     ref_fasta = sys.argv[1]

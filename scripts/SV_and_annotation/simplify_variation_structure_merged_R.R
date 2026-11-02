@@ -1,5 +1,8 @@
 # 根据simplify_variation_structure_merged.py复刻的R版画图脚本
-# 读取diff_changes.txt，按NOR从上到下（NOR 1在顶部）堆叠18个panel
+# 读取diff_changes.txt，按NOR从上到下（NOR1在顶部）堆叠18个panel
+# 注：diff_changes.txt的Assembly列已经是NOR名称（NOR1..NOR18，按数值顺序写出），
+#     故不再读取name_of_the_arrays.txt，也不再做Assembly -> NOR的编号转换，
+#     panel的分组/排序/标签全部直接使用Assembly列的原值
 # 内容：黑色线段（Start/End_Query_Pos 对 Start/End_Ref_Index，端点带圆点marker），
 #       相邻线段之间用红色线连接；x轴以该NOR最左数据点为0、右端扩1000bp，ylim自动加5%边距
 #
@@ -23,8 +26,7 @@
 #   行高91pt（行间间隔16 + panel 60 + 下方刻度标签区15），另在画布底部/左侧各留16pt给共享轴标题
 
 # ---- 输入输出 ----
-input_file <- "diff_changes.txt"
-nor_file   <- "../name_of_the_arrays.txt"
+input_file <- "diff_changes.txt"   # Assembly列即NOR名称，无需额外映射文件
 output_pdf <- "simplify_variation_structure_merged_R.pdf"
 output_png <- "simplify_variation_structure_merged_R_preview.png"  # 预览用
 
@@ -64,20 +66,15 @@ title_bottom_pt <- 18           # 画布最底部共享x轴标题区高度（居
 panel_left_pt   <- title_left_pt + 5 + mai_left_pt   # panel(绘图区)左缘距画布左缘
 
 # ---------- 1. 读取数据 ----------
-# Assembly -> NOR 映射（第3列；去掉Dropped）
-nor_map <- read.delim(nor_file, header = FALSE, stringsAsFactors = FALSE)
-nor_map <- nor_map[nor_map$V3 != "Dropped", c("V1", "V3")]
-names(nor_map) <- c("Assembly", "NOR")
-nor_map$NOR_Number <- as.integer(sub("^NOR +", "", nor_map$NOR))
-
+# Assembly列已经是NOR名称（NOR1..NOR18），直接使用，不做任何转换
 df <- read.delim(input_file, stringsAsFactors = FALSE)
-df <- merge(df, nor_map, by = "Assembly")
-stopifnot(all(c("Start_Query_Pos", "End_Query_Pos",
+stopifnot(all(c("Assembly", "Start_Query_Pos", "End_Query_Pos",
                 "Start_Ref_Index", "End_Ref_Index") %in% names(df)))
 
-# 按NOR_Number分组（升序 => NOR 1 在顶部，与Python groupby排序一致）
-nor_numbers <- sort(unique(df$NOR_Number))
-n_panels    <- length(nor_numbers)
+# 按Assembly分组：保持其在diff_changes.txt中首次出现的顺序
+# （文件按NOR1->NOR18顺序写出，故NOR1在顶部，与Python groupby排序结果一致）
+nor_labels <- unique(df$Assembly)
+n_panels   <- length(nor_labels)
 # 画布高度 = 各行高度之和 + 底部共享x轴标题区
 canvas_height_pt <- title_bottom_pt + n_panels * row_height_pt
 
@@ -92,8 +89,8 @@ pt2tcl <- function(pt) -((pt / 72) / par("csi"))
 # 每行先算xlim/ylim，比例尺 = axes_h_pt / y_range（pt/bp），
 # panel宽 = x_range x 比例尺（x轴数值-长度比例与y轴一致）；
 # 画布宽度由最宽panel自动推算
-row_info <- lapply(nor_numbers, function(nor) {
-  g <- df[df$NOR_Number == nor, ]
+row_info <- lapply(nor_labels, function(label) {
+  g <- df[df$Assembly == label, ]
   g <- g[order(g$Start_Query_Pos), ]
   x0 <- min(g$Start_Query_Pos)                      # 该panel最左数据点（也就是全panel最左的墨水）
   g$Start_Query_Pos <- g$Start_Query_Pos - x0       # 4) 平移到"最左数据点=0"：去掉panel左侧空白，
@@ -104,7 +101,7 @@ row_info <- lapply(nor_numbers, function(nor) {
   ymax <- max(g$Start_Ref_Index, g$End_Ref_Index)
   span <- max(ymax - ymin, 1e-9)
   ylim <- c(ymin - 0.05 * span, ymax + 0.05 * span) # matplotlib默认5%边距
-  list(nor = nor, g = g, xlim = xlim, ylim = ylim)
+  list(label = label, g = g, xlim = xlim, ylim = ylim)
 })
 panel_w_pt     <- vapply(row_info, function(r) diff(r$xlim) * axes_h_pt / diff(r$ylim), numeric(1))
 panel_w_max_pt <- max(panel_w_pt)
@@ -153,9 +150,10 @@ draw_panel <- function(r, panel_w_pt) {
        tcl = pt2tcl(tick_len_pt), las = 1,
        lwd = 0, lwd.ticks = pt2lwd(axis_lwd_pt), cex.axis = axis_text_pt / 12)
   # NOR编号：放在原y轴标题的位置——panel左侧、水平、垂直居中（8pt）
+  # 直接用Assembly列的原值（NOR1..NOR18），不做"NOR + 编号"的拼装
   # mtext(side=2, las=1, adj=1)：右缘恰好落在 line×csi(=14.4pt) 处，故取 nor_label_line
   # 注：y轴标题"Ref Index (kb)"已改为全图共享（画在画布最左侧、垂直居中，见draw_all）
-  mtext(sprintf("NOR %d", r$nor), side = 2, line = nor_label_line,
+  mtext(r$label, side = 2, line = nor_label_line,
         las = 1, adj = 1, cex = nor_text_pt / 12)
 }
 

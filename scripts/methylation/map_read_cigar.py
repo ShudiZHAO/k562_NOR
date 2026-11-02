@@ -1,11 +1,49 @@
 #!/usr/bin/env python3
 """
-处理fragment_align_info_formatted.xlsx文件，生成连接的cigar字段
+处理 fragment_align_info_formatted.xls 文件（tab 分隔的文本），生成连接的 cigar 字段
+
+默认输入文件为 fragment_align_info_formatted.xls；如果输入是真正的 Excel 文件，
+脚本也会自动回退到 read_excel 读取。
+
+用法：
+    python map_read_cigar.py [input_file] [output_file]
 """
 
-import pandas as pd
 import re
+import sys
+
+import pandas as pd
+
 from cigar_to_lengths import parse_cigar
+
+REQUIRED_COLUMNS = [
+    'fragment_id', 'read_id', 'start', 'end',
+    'cigar', 'aligned_pos', 'aligned_end',
+]
+DEFAULT_INPUT_FILE = 'fragment_align_info_formatted.xls'
+DEFAULT_OUTPUT_FILE = 'read_cigar_mapped.txt'
+
+
+def read_align_info(input_file):
+    """
+    读取比对信息表。
+
+    优先按 tab 分隔文本读取，因为 cigar_to_lengths.py 生成的 .xls 实际是文本；
+    如果按文本读取失败，再尝试按 Excel 文件读取。
+    """
+    str_columns = {'fragment_id': str, 'read_id': str, 'cigar': str}
+    try:
+        df = pd.read_csv(
+            input_file, sep='\t', encoding='utf-8-sig', dtype=str_columns,
+        )
+        if all(col in df.columns for col in REQUIRED_COLUMNS):
+            return df
+    except Exception:
+        pass
+
+    # 兼容真正的 .xlsx/.xls Excel 文件
+    return pd.read_excel(input_file, dtype=str_columns)
+
 
 def process_cigar(cigar, start, end):
     """
@@ -22,6 +60,7 @@ def process_cigar(cigar, start, end):
         cigar = re.sub(r'(\d+)S$', r'\1I', cigar)
     
     return cigar
+
 
 def merge_consecutive_cigar(cigar):
     """
@@ -54,30 +93,35 @@ def merge_consecutive_cigar(cigar):
     
     return ''.join(merged)
 
-def extract_assembly(fragment_id):
+
+def extract_array(fragment_id):
     """
-    从fragment_id中提取Assembly_x信息
+    从 fragment_id 中提取 array 信息（NORx）
+
+    例如：NOR10_0 -> NOR10
     """
-    # 假设fragment_id格式类似 "Assembly_1_0"
-    match = re.match(r'Assembly_(\d+)_', fragment_id)
+    if not isinstance(fragment_id, str):
+        return None
+
+    match = re.match(r'^(NOR\d+)_', fragment_id)
     if match:
-        return f"Assembly_{match.group(1)}"
+        return match.group(1)
     return None
 
+
 def main():
-    # 读取xlsx文件
-    input_file = 'fragment_align_info_formatted.xlsx'
-    output_file = 'read_cigar_mapped.txt'
-    
+    # 读取输入文件；默认是 tab 分隔文本，也可以传入真正的 Excel 文件
+    input_file = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_INPUT_FILE
+    output_file = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_OUTPUT_FILE
+
     try:
-        df = pd.read_excel(input_file)
+        df = read_align_info(input_file)
     except Exception as e:
         print(f"Error reading file: {e}")
         return
-    
+
     # 确保必要的列存在
-    required_columns = ['fragment_id', 'read_id', 'start', 'end', 'cigar', 'aligned_pos', 'aligned_end']
-    for col in required_columns:
+    for col in REQUIRED_COLUMNS:
         if col not in df.columns:
             print(f"Error: Column '{col}' not found in input file")
             return
@@ -95,7 +139,7 @@ def main():
         processed_cigars = []
         prev_end = None
         min_start_aligned_pos = None
-        assemblies = set()
+        arrays = set()
         
         for _, row in group.iterrows():
             start = row['start']
@@ -109,10 +153,10 @@ def main():
             if min_start_aligned_pos is None:
                 min_start_aligned_pos = aligned_pos
 
-            # 提取并收集Assembly信息
-            assembly = extract_assembly(fragment_id)
-            if assembly:
-                assemblies.add(assembly)
+            # 提取并收集 array（NORx）信息
+            array = extract_array(fragment_id)
+            if array:
+                arrays.add(array)
 
             # 处理cigar
             processed_cigar = process_cigar(cigar, start, end)
@@ -140,16 +184,16 @@ def main():
         # 调用parse_cigar函数计算query_length_from_cigar和ref_consumed
         query_length_from_cigar, ref_consumed = parse_cigar(combined_cigar)
 
-        # 处理Assembly信息
-        if len(assemblies) == 1:
-            assembly = assemblies.pop()
+        # 处理 array（NORx）信息
+        if len(arrays) == 1:
+            array = arrays.pop()
         else:
-            assembly = "ERROR: Multiple assemblies found"
-            print(f"Warning: Read {read_id} has multiple assemblies: {assemblies}")
+            array = "ERROR: Multiple arrays found"
+            print(f"Warning: Read {read_id} has multiple arrays: {arrays}")
 
         result.append({
             'read_id': read_id,
-            'assembly': assembly,
+            'array': array,
             'aligned_pos': min_start_aligned_pos,
             'query_length_from_cigar': query_length_from_cigar,
             'ref_consumed': ref_consumed,

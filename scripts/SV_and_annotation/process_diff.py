@@ -144,104 +144,29 @@ def save_merge_results(results, output_file):
                 
                 f.write(f"{assembly}\t{start_row['query_pos']}\t{start_row['ref_index']}\t{start_row['diff']}\t{end_row['query_pos']}\t{end_row['ref_index']}\t{end_row['diff']}\t{result['diff_value']}\t{result['row_count']}\n")
 
-def plot_from_diff_changes(diff_changes_file, output_dir, file_format='pdf'):
-    """
-    从diff_changes.txt文件生成图像
-    """
-    # 读取diff_changes.txt文件
-    df = pd.read_csv(diff_changes_file, sep='\t')
-    
-    # 按Assembly分组
-    assembly_groups = df.groupby('Assembly')
-    
-    # 创建输出文件夹
-    os.makedirs(output_dir, exist_ok=True)
-    
-    for assembly, group in assembly_groups:
-        # 创建图形
-        sorted_group = group.sort_values('Start_Query_Pos').reset_index(drop=True)
-
-        # 计算x的总范围
-        x_min = sorted_group['Start_Query_Pos'].min()
-        x_max = sorted_group['End_Query_Pos'].max()
-        x_range = x_max - x_min
-
-        plt.figure(figsize=(x_range/5000, 8))
-
-        # 设置x轴刻度
-        plt.xlim(x_min-1000, x_max+1000)
-        plt.gca().xaxis.set_major_locator(ticker.MultipleLocator(10000))
-        plt.gca().xaxis.set_minor_locator(ticker.MultipleLocator(2000))
-        plt.ticklabel_format(style='plain', axis='both')
-        
-        # 用红色线连接跳跃的点
-        if len(sorted_group) > 1:
-            for i in range(1, len(sorted_group)):
-                prev_row = sorted_group.iloc[i-1]
-                curr_row = sorted_group.iloc[i]
-                
-                # 连接前一段的结束点和当前段的起始点
-                plt.plot([prev_row['End_Query_Pos'], curr_row['Start_Query_Pos']], 
-                         [prev_row['End_Ref_Index'], curr_row['Start_Ref_Index']], 
-                         color='red', linestyle='-', linewidth=0.7)
-
-        # 绘制线段
-        for _, row in group.iterrows():
-            plt.plot([row['Start_Query_Pos'], row['End_Query_Pos']], 
-                     [row['Start_Ref_Index'], row['End_Ref_Index']], color='black',
-                     marker='o', markersize=1, linestyle='-', linewidth=1.5)
-
-        # 添加标题和标签
-        plt.title(f'{assembly} Structure')
-        plt.xlabel('Query Position')
-        plt.ylabel('Ref Index')
-        
-        # 保存图形
-        output_file = os.path.join(output_dir, f'{assembly}.{file_format}')
-        plt.savefig(output_file, dpi=150, bbox_inches='tight')
-        
-        # 关闭图形以释放内存
-        plt.close()
-        
-        print(f"Saved plot for {assembly} to {output_file}")
-
 def main():
     # 解析命令行参数
     parser = argparse.ArgumentParser(description='Process unit structure map and generate plots')
     parser.add_argument('--input', type=str, default='unit_structure_map.txt', help='Input unit structure map file')
-    parser.add_argument('--diff-changes', type=str, help='Directly use diff_changes.txt to generate plots (skips processing)')
-    parser.add_argument('--output-dir', type=str, default='simplify_continuous_structure', help='Output directory for plots')
-    parser.add_argument('--format', type=str, default='pdf', choices=['pdf', 'png'], help='Output file format')
     args = parser.parse_args()
 
-    if args.diff_changes:
-        # 直接从diff_changes.txt生成图像
-        print(f"Generating plots from {args.diff_changes}...")
-        plot_from_diff_changes(args.diff_changes, args.output_dir, args.format)
-        print(f"All plots saved to {args.output_dir} directory")
-    else:
-        # 处理unit_structure_map.txt文件
-        print(f"Processing {args.input}...")
-        assembly_data = process_assembly_data(args.input)
-        print(f"Processed {len(assembly_data)} assemblies")
+    # 处理unit_structure_map.txt文件
+    print(f"Processing {args.input}...")
+    assembly_data = process_assembly_data(args.input)
+    print(f"Processed {len(assembly_data)} assemblies")
         
-        # 合并diff变化
-        print("Merging diff changes...")
-        merge_results = merge_diff_changes(assembly_data)
+    # 合并diff变化
+    print("Merging diff changes...")
+    merge_results = merge_diff_changes(assembly_data)
 
-        # 过滤满足条件的行
-        print("Filtering diff changes...")
-        merge_results = filter_diff_changes(merge_results)
+    # 过滤满足条件的行
+    print("Filtering diff changes...")
+    merge_results = filter_diff_changes(merge_results)
         
-        # 保存结果
-        output_file = 'diff_changes.txt'
-        save_merge_results(merge_results, output_file)
-        print(f"Merge results saved to {output_file}")
-        
-        # 绘制每个assembly的结构
-        print("Plotting assembly structures...")
-        plot_from_diff_changes(output_file, args.output_dir, args.format)
-        print(f"All plots saved to {args.output_dir} directory")
+    # 保存结果
+    output_file = 'diff_changes.txt'
+    save_merge_results(merge_results, output_file)
+    print(f"Merge results saved to {output_file}")
 
 if __name__ == "__main__":
     main()

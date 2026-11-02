@@ -1,65 +1,85 @@
 #!/usr/bin/env python3
 """
-模拟连接过程，为每个consensus_seq中的序列生成包含N的完整长度序列
+模拟连接过程，为每个 consensus 序列生成包含 N 的完整长度序列
+
+输入目录结构为 consensus_trimed/NORx/<y>_consensus.fasta（与 trim_consensus_ends.py 输出一致）。
 """
 
 import os
+import re
 import sys
+
 from Bio import SeqIO
+
+# barcode 文件中的空占位符：占一个 junction 槽位，但长度为 0
+EMPTY_BARCODE_TOKENS = ('', 'empty', 'nan', 'none')
+
+# consensus_trimed/NORx/ 下的 fragment 文件名约定：<y>_consensus.fasta
+FRAGMENT_PATTERN = re.compile(r'^(\d+)_consensus\.fasta$')
+
+
+def normalize_barcode(token):
+    """把 empty 等占位符转成空字符串，其余 barcode 去空白并转大写。"""
+    token = token.strip()
+    if token.lower() in EMPTY_BARCODE_TOKENS:
+        return ''
+    return token.upper()
+
 
 def read_barcode_info(barcode_file):
     """
     读取 barcode 信息
-    返回一个字典：{assembly: [barcode1, barcode2, ...]}
+    返回一个字典：{array_name: [barcode1, barcode2, ...]}
+    empty 占位符保留槽位，但转成空字符串
     """
     barcode_info = {}
     current_assembly = None
     barcodes = []
-    
-    with open(barcode_file, 'r') as f:
+
+    with open(barcode_file, 'r', encoding='utf-8-sig') as f:
         for line in f:
             line = line.strip()
             if line.startswith('>'):
                 if current_assembly and barcodes:
                     barcode_info[current_assembly] = barcodes
-                current_assembly = line[1:]
+                current_assembly = line[1:].strip()
                 barcodes = []
             elif line:
-                # 分割多个 barcode
-                line_barcodes = line.split()
+                # 分割多个 barcode；empty 表示该位置没有 barcode
+                line_barcodes = [normalize_barcode(x) for x in line.split()]
                 barcodes.extend(line_barcodes)
-    
-    # 处理最后一个 assembly
+
+    # 处理最后一个 array
     if current_assembly and barcodes:
         barcode_info[current_assembly] = barcodes
     return barcode_info
 
 def get_fragment_sequences(consensus_dir, assembly):
     """
-    获取指定 assembly 的所有 fragment 序列
+    获取 consensus_dir/NORx/ 下的所有 fragment 序列
     返回一个字典：{y: (sequence, filename)}
     """
     sequences = {}
-    prefix = f"{assembly}_"
-    
-    for filename in os.listdir(consensus_dir):
-        if filename.startswith(prefix) and filename.endswith('.fasta'):
-            # 提取 y 值
-            try:
-                y_str = filename[len(prefix):].split('_')[0]
-                y = int(y_str)
-            except:
-                continue
-            
-            # 读取序列
-            filepath = os.path.join(consensus_dir, filename)
-            for record in SeqIO.parse(filepath, 'fasta'):
-                sequences[y] = (str(record.seq), filename)
-                break  # 只取第一个序列
-    
+    assembly_dir = os.path.join(consensus_dir, assembly)
+
+    if not os.path.isdir(assembly_dir):
+        return sequences
+
+    for filename in os.listdir(assembly_dir):
+        match = FRAGMENT_PATTERN.match(filename)
+        if not match:
+            continue
+        y = int(match.group(1))
+
+        # 读取序列
+        filepath = os.path.join(assembly_dir, filename)
+        for record in SeqIO.parse(filepath, 'fasta'):
+            sequences[y] = (str(record.seq), filename)
+            break  # 只取第一个序列
+
     return sequences
 
-def calculate_positions(sequences, barcodes, prefix_seq, suffix_seq):
+def calculate_positions(sequences, barcodes):
     """
     计算每个 fragment 在完整序列中的位置
     返回一个字典：{y: (start, end)}
@@ -75,12 +95,12 @@ def calculate_positions(sequences, barcodes, prefix_seq, suffix_seq):
         # 更新当前位置
         current_pos += seq_len
         if i < len(sorted_ys) - 1 and i < len(barcodes):
-            # 添加 barcode 长度
-            current_pos += len(prefix_seq) + len(barcodes[i]) + len(suffix_seq)
+            # junction 只添加 barcode 长度
+            current_pos += len(barcodes[i])
     
     return positions, current_pos
 
-def generate_padded_sequence(target_y, sequences, barcodes, prefix_seq, suffix_seq, total_length, positions):
+def generate_padded_sequence(target_y, sequences, barcodes, total_length, positions):
     """
     为指定的 fragment 生成包含 N 的完整长度序列
     """
@@ -96,29 +116,19 @@ def generate_padded_sequence(target_y, sequences, barcodes, prefix_seq, suffix_s
         if i < total_length:
             result[i] = current_seq[i - start]
     
-    # 非结尾的 fragment 在右端添加 prefix_seq
+    # 非开头的 fragment 在左端只添加 barcode
     sorted_ys = sorted(sequences.keys())
     target_index = sorted_ys.index(target_y)
-    if target_index < len(sorted_ys) - 1:
-        # 计算添加 prefix_seq 的位置
-        prefix_start = end
-        prefix_end = prefix_start + len(prefix_seq)
-        for i in range(prefix_start, prefix_end):
-            if i < total_length:
-                result[i] = prefix_seq[i - prefix_start]
-    
-    # 非开头的 fragment 在左端添加 barcode 和 suffix_seq
     if target_index > 0:
-        # 计算添加 barcode 和 suffix_seq 的位置
+        # 计算添加 barcode 的位置
         barcode_index = target_index - 1
         if barcode_index < len(barcodes):
             barcode = barcodes[barcode_index]
-            insert_seq = barcode + suffix_seq
-            insert_start = start - len(insert_seq)
+            insert_start = start - len(barcode)
             insert_end = start
             if insert_start >= 0:
                 for i in range(insert_start, insert_end):
-                    result[i] = insert_seq[i - insert_start]
+                    result[i] = barcode[i - insert_start]
     
     return ''.join(result)
 
@@ -133,11 +143,7 @@ def main():
     # 读取 barcode 信息
     barcode_info = read_barcode_info(barcode_file)
     
-    # 定义 barcode 前后的序列
-    prefix_seq = "TGGCGGAGATGGGCGCC"
-    suffix_seq = "GCGAGG"
-    
-    # 处理每个 assembly
+    # 处理每个 array（NORx）
     output_dir = 'templete_for_methylation'
     os.makedirs(output_dir, exist_ok=True)
     for assembly, barcodes in barcode_info.items():
@@ -145,18 +151,19 @@ def main():
         sequences = get_fragment_sequences(consensus_dir, assembly)
         
         if not sequences:
-            print(f"Warning: No fragments found for Assembly_{assembly}")
+            print(f"Warning: No fragments found for {assembly} "
+                  f"(expected {assembly}/<y>_consensus.fasta in {consensus_dir})")
             continue
         
         # 计算每个 fragment 的位置和总长度
-        positions, total_length = calculate_positions(sequences, barcodes, prefix_seq, suffix_seq)
+        positions, total_length = calculate_positions(sequences, barcodes)
         
         # 为每个 fragment 生成包含 N 的完整长度序列
         for y, (_, filename) in sequences.items():
-            padded_seq = generate_padded_sequence(y, sequences, barcodes, prefix_seq, suffix_seq, total_length, positions)
+            padded_seq = generate_padded_sequence(y, sequences, barcodes, total_length, positions)
             
-            # 输出结果
-            output_file = os.path.join(output_dir, filename)
+            # 输出文件名补上 array 前缀，例如 NOR1_0_consensus.fasta
+            output_file = os.path.join(output_dir, f"{assembly}_{filename}")
             with open(output_file, 'w') as f:
                 f.write(">consensus_gap_aware\n")
                 # 每行 60 个碱基
