@@ -4,7 +4,7 @@
 
 | 流程 | 目录 | 说明 |
 | --- | --- | --- |
-| 组装 (Assembly) | `scripts/assembly/` | 从含 rDNA 的 ONT reads 出发，按 barcode 路径组装出 NOR1–NOR18 的完整阵列 |
+| 组装 (Assembly) | `scripts/assembly/` | 从含 rDNA 的 ONT reads 出发，按 barcode 路径组装出 NOR1–NOR18 的完整序列 |
 | 甲基化 (Methylation) | `scripts/methylation/` | 生成 query/模板序列，minimap2 比对后生成带有准确CIGAR信息的BAM文件的作为 modkit的输入， 统计 5mC/5hmC |
 | 结构变异与注释 (SV & annotation) | `scripts/SV_and_annotation/` | k-mer mapping → 生成 GFF 注释 → 找SV与 R 作图 |
 
